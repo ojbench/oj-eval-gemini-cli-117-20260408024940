@@ -3,14 +3,8 @@
 
 #include <cstddef>
 
-/**
- * 枚举类，用于枚举可能的置换策略
- */
 enum class ReplacementPolicy { kDEFAULT = 0, kFIFO, kLRU, kMRU, kLRU_K };
 
-/**
- * @brief 该类用于维护每一个页对应的信息以及其访问历史，用于在尝试置换时查询需要的信息。
- */
 class PageNode {
 public:
   PageNode() : page_id_(0), access_times_(nullptr), k_(0), access_count_(0), add_time_(0), last_access_time_(0), valid_(false), head_(0) {}
@@ -57,6 +51,17 @@ public:
     valid_ = false;
   }
 
+  void Swap(PageNode& other) {
+    auto tmp_page_id = page_id_; page_id_ = other.page_id_; other.page_id_ = tmp_page_id;
+    auto tmp_access_times = access_times_; access_times_ = other.access_times_; other.access_times_ = tmp_access_times;
+    auto tmp_k = k_; k_ = other.k_; other.k_ = tmp_k;
+    auto tmp_access_count = access_count_; access_count_ = other.access_count_; other.access_count_ = tmp_access_count;
+    auto tmp_add_time = add_time_; add_time_ = other.add_time_; other.add_time_ = tmp_add_time;
+    auto tmp_last_access_time = last_access_time_; last_access_time_ = other.last_access_time_; other.last_access_time_ = tmp_last_access_time;
+    auto tmp_valid = valid_; valid_ = other.valid_; other.valid_ = tmp_valid;
+    auto tmp_head = head_; head_ = other.head_; other.head_ = tmp_head;
+  }
+
   bool IsValid() const { return valid_; }
   std::size_t GetPageId() const { return page_id_; }
   std::size_t GetAddTime() const { return add_time_; }
@@ -90,12 +95,7 @@ public:
   ReplacementManager& operator=(const ReplacementManager&) = delete;
 
   ReplacementManager(std::size_t max_size, std::size_t k, ReplacementPolicy default_policy) 
-    : max_size_(max_size), k_(k), default_policy_(default_policy), current_time_(0), size_(0) {
-    if (max_size_ > 0) {
-      cache_ = new PageNode[max_size_];
-    } else {
-      cache_ = nullptr;
-    }
+    : max_size_(max_size), k_(k), default_policy_(default_policy), current_time_(0), size_(0), capacity_(0), cache_(nullptr) {
   }
 
   ~ReplacementManager() {
@@ -118,8 +118,8 @@ public:
       policy = default_policy_;
     }
 
-    for (std::size_t i = 0; i < max_size_; ++i) {
-      if (cache_[i].IsValid() && cache_[i].GetPageId() == page_id) {
+    for (std::size_t i = 0; i < size_; ++i) {
+      if (cache_[i].GetPageId() == page_id) {
         cache_[i].AddAccess(current_time_);
         evict_id = npos;
         return;
@@ -127,14 +127,20 @@ public:
     }
 
     if (size_ < max_size_) {
-      for (std::size_t i = 0; i < max_size_; ++i) {
-        if (!cache_[i].IsValid()) {
-          cache_[i].Init(page_id, k_, current_time_);
-          size_++;
-          evict_id = npos;
-          return;
+      if (size_ == capacity_) {
+        std::size_t new_capacity = capacity_ == 0 ? 1 : capacity_ * 2;
+        if (new_capacity > max_size_) new_capacity = max_size_;
+        PageNode* new_cache = new PageNode[new_capacity];
+        for (std::size_t i = 0; i < size_; ++i) {
+          new_cache[i].Swap(cache_[i]);
         }
+        if (cache_) delete[] cache_;
+        cache_ = new_cache;
+        capacity_ = new_capacity;
       }
+      cache_[size_].Init(page_id, k_, current_time_);
+      size_++;
+      evict_id = npos;
     } else {
       std::size_t evict_idx = FindEvictIndex(policy);
       evict_id = cache_[evict_idx].GetPageId();
@@ -144,9 +150,12 @@ public:
 
   bool RemovePage(std::size_t page_id) {
     if (max_size_ == 0) return false;
-    for (std::size_t i = 0; i < max_size_; ++i) {
-      if (cache_[i].IsValid() && cache_[i].GetPageId() == page_id) {
-        cache_[i].Invalidate();
+    for (std::size_t i = 0; i < size_; ++i) {
+      if (cache_[i].GetPageId() == page_id) {
+        if (i != size_ - 1) {
+          cache_[i].Swap(cache_[size_ - 1]);
+        }
+        cache_[size_ - 1].Invalidate();
         size_--;
         return true;
       }
@@ -183,21 +192,13 @@ private:
   ReplacementPolicy default_policy_;
   std::size_t current_time_;
   std::size_t size_;
+  std::size_t capacity_;
   PageNode* cache_;
 
   std::size_t FindEvictIndex(ReplacementPolicy policy) const {
     std::size_t best_idx = 0;
-    bool found_first = false;
 
-    for (std::size_t i = 0; i < max_size_; ++i) {
-      if (!cache_[i].IsValid()) continue;
-
-      if (!found_first) {
-        best_idx = i;
-        found_first = true;
-        continue;
-      }
-
+    for (std::size_t i = 1; i < size_; ++i) {
       if (policy == ReplacementPolicy::kFIFO) {
         if (cache_[i].GetAddTime() < cache_[best_idx].GetAddTime()) {
           best_idx = i;
